@@ -1,0 +1,4 @@
+.config
+/target
+.env
+.cache.json

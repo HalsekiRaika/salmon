@@ -8,19 +8,13 @@ use yansi::{Paint, Color};
 /// ## Usage
 ///
 /// ```rust
-/// let logger = Logger::new(Option<&'static str>);
+/// use logger::Logger;
 ///
-/// //Infomation
-/// logger.pinfo("infomation");
+/// let logger = Logger::new(Some("logger"));
 ///
-/// //Caution
-/// logger.pcaut("caution");
-///
-/// //Warning
-/// logger.pwarn("warning");
-///
-/// //Error
-/// logger.perr("error");
+/// // Infomation
+/// // [%H:%M:%S - %m/%d] [ Info  ] [ logger       ] some information log
+/// logger.pinfo("some information log");
 /// ```
 
 #[derive(Debug, Clone)]

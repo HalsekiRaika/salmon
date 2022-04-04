@@ -1,12 +1,15 @@
+#![allow(dead_code)]
+
 use std::io::Write;
 use std::path::Path;
+use anyhow::{Result, Context};
 use git2::{AnnotatedCommit, AutotagOption, FetchOptions, RemoteCallbacks, Repository, ResetType};
 use crate::logger::Logger;
 
 const DEFAULT_URL: &str = "https://github.com/ReiRokusanami0010/NekomataLibrary";
 const DEFAULT_PATH: &str = "./.config";
 
-fn checked_clone_or_open() -> Option<Repository> {
+fn get_open_or_clone() -> Repository {
     let repository = dotenv::var("CONFIG_REPO")
         .ok()
         .unwrap_or_else(|| DEFAULT_URL.to_string());
@@ -15,27 +18,27 @@ fn checked_clone_or_open() -> Option<Repository> {
         .unwrap_or_else(|| DEFAULT_PATH.to_string());
     if Path::new(DEFAULT_PATH).exists() && !Path::new(&format!("{}{}", DEFAULT_PATH, "/.git")).exists() {
         match Repository::clone(&repository, &download) {
-            Ok(repo) => Some(repo),
+            Ok(repo) => repo,
             Err(reason) => panic!("{}", reason)
         }
     } else {
         match Repository::open(&download) {
-            Ok(repo) => Some(repo),
+            Ok(repo) => repo,
             Err(reason) => panic!("{}", reason)
         }
     }
 }
 
-fn hard_reset(repo: &Repository) {
-    repo.reset(&repo.revparse_single("HEAD").expect("cannot rev parse"), ResetType::Hard, None)
-        .expect("cannot hard reset")
+fn hard_reset(repo: &Repository) -> Result<()> {
+    repo.reset(&repo.revparse_single("HEAD").context(RepositoryManagementError::RevisionParse)?, ResetType::Hard, None)
+        .context(RepositoryManagementError::HardReset)
 }
 
 const REMOTE_NAME: &str = "origin";
 const REMOTE_BRANCH: &str = "master";
 const REFERENCE_NAME: &str = "FETCH_HEAD";
 
-fn fetch_latest_contents(config_repo: &Repository) -> AnnotatedCommit {
+fn fetch_latest_contents(config_repo: &Repository) -> Result<AnnotatedCommit> {
     let mut fetch_callback = RemoteCallbacks::new();
     fetch_callback.transfer_progress(|status| {
         let logger = Logger::new(Some("transfer"));
@@ -54,11 +57,14 @@ fn fetch_latest_contents(config_repo: &Repository) -> AnnotatedCommit {
     fetch_option.download_tags(AutotagOption::All);
 
     let mut remote = config_repo.find_remote(REMOTE_NAME)
-        .expect("Cannot find remote.");
+        .context(RepositoryManagementError::CommitFind("remote"))?;
+
     let logger = Logger::new(Some("fetch"));
+
     logger.info(format!("Fetching {}", remote.name().unwrap()));
+
     remote.fetch(&[REMOTE_BRANCH], Some(&mut fetch_option), None)
-        .expect("Cannot fetch from remote.");
+        .context(RepositoryManagementError::Fetch)?;
 
     let status = remote.stats();
     if status.local_objects() > 0 {
@@ -70,77 +76,120 @@ fn fetch_latest_contents(config_repo: &Repository) -> AnnotatedCommit {
     }
 
     let remote_head = config_repo.find_reference(REFERENCE_NAME)
-        .expect("Cannot find reference.");
+        .context(RepositoryManagementError::ReferenceFind)?;
 
     config_repo.reference_to_annotated_commit(&remote_head)
-        .expect("head_reference cannot sublimate annotated_commit.")
+        .context(RepositoryManagementError::Sublimate("head_reference"))
 }
 
 const HEAD: &str = "HEAD";
 
-#[allow(unused_must_use)]
-fn merge(config_repo: &Repository, local: &AnnotatedCommit, remote: &AnnotatedCommit) {
+fn merge(config_repo: &Repository, local: &AnnotatedCommit, remote: &AnnotatedCommit) -> Result<()> {
     let logger = Logger::new(Some("merge"));
 
     let local_tree = config_repo.find_commit(local.id())
-        .expect("cannot find local commit.").tree()
-        .expect("cannot get local tree.");
+        .context(RepositoryManagementError::CommitFind("local"))?.tree()
+        .context(RepositoryManagementError::TreeGet("local"))?;
     let remote_tree = config_repo.find_commit(remote.id())
-        .expect("cannot find remote commit.").tree()
-        .expect("cannot get remote tree");
+        .context(RepositoryManagementError::CommitFind("remote"))?.tree()
+        .context(RepositoryManagementError::TreeGet("remote"))?;
     let predecessor = config_repo.find_commit(config_repo.merge_base(local.id(), remote.id())
-        .expect("cannot merge")).expect("cannot find predecessor commit.").tree()
-        .expect("cannot get predecessor tree");
+        .context(RepositoryManagementError::Merge(98))?)
+        .context(RepositoryManagementError::CommitFind("predecessor"))?.tree()
+        .context(RepositoryManagementError::TreeGet("predecessor"))?;
 
     let mut index = config_repo.merge_trees(&predecessor, &local_tree, &remote_tree, None)
-        .expect("cannot merge tree.");
+        .context(RepositoryManagementError::Merge(103))?;
 
     if index.has_conflicts() {
         logger.caut("conflict detected.");
-        config_repo.checkout_index(Some(&mut index), None);
-        return;
+        #[allow(unused_must_use)]
+        config_repo.checkout_index(Some(&mut index), None)
+            .context(RepositoryManagementError::Checkout)?;
+        return Ok(());
     }
 
     let generated = config_repo.find_tree(index.write_tree_to(config_repo).expect("cannot write tree."))
-        .expect("not found generated tree.");
+        .context(RepositoryManagementError::TreeGenerate)?;
 
     let msg = format!("Merge: {} into {}", remote.id(), local.id());
     let signature = config_repo.signature()
-        .expect("cannot get repository signature.");
+        .context(RepositoryManagementError::SignatureGet)?;
     let local_commit = config_repo.find_commit(local.id())
-        .expect("not found local commit.");
+        .context(RepositoryManagementError::CommitFind("local"))?;
     let remote_commit = config_repo.find_commit(remote.id())
-        .expect("not found remote commit.");
+        .context(RepositoryManagementError::CommitFind("remote"))?;
 
     let _merge = config_repo.commit(Some(HEAD), &signature, &signature, &msg, &generated, &[&local_commit, &remote_commit])
-        .expect("cannot merge commit.");
+        .context(RepositoryManagementError::Merge(123))?;
 
     config_repo.checkout_head(None)
-        .expect("cannot checkout head.");
+        .context(RepositoryManagementError::Checkout)?;
 
-    logger.info("Merge pull successful.")
+    logger.info("Merge pull successful.");
+
+    Ok(())
 }
 
-fn update(config_repo: &Repository, remote_head: AnnotatedCommit) {
+fn update(config_repo: &Repository, remote_head: AnnotatedCommit) -> Result<()> {
     let analysis = config_repo.merge_analysis(&[&remote_head])
-        .expect("cannot analysis");
+        .context(RepositoryManagementError::Analysis)?;
     let logger = Logger::new(Some("update"));
     if analysis.0.is_fast_forward() {
-        logger.info("fast forward does not impl... X/");
+        logger.error("fast forward does not impl... X/");
+        logger.error("please reset or remake dir config directory.");
+        unimplemented!()
     } else if analysis.0.is_normal() {
         let head = config_repo.head().expect("cannot get local head");
         let local_head = config_repo.reference_to_annotated_commit(&head)
-            .expect("cannot get local head");
-        merge(config_repo, &local_head, &remote_head);
+            .context(RepositoryManagementError::HeadGetFail("local"))?;
+        merge(config_repo, &local_head, &remote_head)
+            .context(RepositoryManagementError::Merge(145))?;
     } else {
         logger.info("no-op ;3");
     }
+
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RepositoryManagementError {
+    #[error("failed hard reset.")]
+    HardReset,
+    #[error("cannot find {} commit.", .0)]
+    CommitFind(&'static str),
+    #[error("cannot get {} tree.", .0)]
+    TreeWrite(&'static str),
+    #[error("cannot get {} tree.", .0)]
+    TreeGet(&'static str),
+    #[error("cannot generate tree.")]
+    TreeGenerate,
+    #[error("cannot analysis repository.")]
+    Analysis,
+    #[error("cannot merge. from line: {}", .0)]
+    Merge(usize),
+    #[error("cannot get")]
+    SignatureGet,
+    #[error("cannot check out.")]
+    Checkout,
+    #[error("cannot fetch.")]
+    Fetch,
+    #[error("cannot find reference")]
+    ReferenceFind,
+    #[error("{} cannot sublimate annotated commit.", .0)]
+    Sublimate(&'static str),
+    #[error("cannot get {} head", .0)]
+    HeadGetFail(&'static str),
+    #[error("cannot rev parse")]
+    RevisionParse,
 }
 
 pub fn setup_config_repository() {
-    let config_repo = checked_clone_or_open()
-        .expect("cannot open.");
-    hard_reset(&config_repo);
-    let latest = fetch_latest_contents(&config_repo);
+    let config_repo = get_open_or_clone();
+    hard_reset(&config_repo)
+        .expect("Failed hard reset to repository.");
+    let latest = fetch_latest_contents(&config_repo)
+        .expect("Failed fetch latest.");
     update(&config_repo, latest)
+        .expect("Failed update repository.");
 }

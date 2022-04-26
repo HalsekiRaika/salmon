@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package yarn;
+package salmon;
 
 import "google/protobuf/timestamp.proto";
 
-service YarnApi {
+service SalmonApi {
     rpc insertReqLive(stream Live) returns (TaskResult);
     rpc insertReqChannel(stream Channel) returns (TaskResult);
     rpc insertReqVTuber(stream Liver) returns (TaskResult);

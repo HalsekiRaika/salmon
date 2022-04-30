@@ -110,6 +110,7 @@ impl From<Etag> for String {
     }
 }
 
+// Todo: Cacheをさらに汎用的にする為、ジェネリクスを使用すること。
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub struct Cache {
     key: String,

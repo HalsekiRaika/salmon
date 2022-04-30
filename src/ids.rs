@@ -50,6 +50,12 @@ impl<T> StringId<T> {
     }
 }
 
+impl<T> Display for StringId<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.value, f)
+    }
+}
+
 impl<T> Default for StringId<T> {
     fn default() -> Self {
         StringId::new(String::new())

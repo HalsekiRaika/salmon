@@ -99,10 +99,6 @@ pub async fn channel_info_request_handler() -> anyhow::Result<()> {
         let infos = channel_info_request(liver).await
             .expect("channel_info_request");
 
-        for info in &infos {
-            println!("{}", info.as_ref_snippet().as_ref_title());
-        }
-
         let send = infos.iter()
             .map(|info| salmon::Channel::from(info.to_owned()))
             .collect::<VecDeque<_>>();
@@ -140,6 +136,7 @@ pub async fn upcoming_live_request_handler() -> anyhow::Result<()> {
             .filter(|video| !video.is_live_finished())
             .filter(|video| !video.is_too_long_span_live())
             .filter(|video| !get_regex_for_ignored().is_match(video.as_ref_title()))
+            .inspect(|video| logger.debug(format!("{}: {}", video.as_ref_id(), video.as_ref_title())))
             .map(|video| video.to_owned())
             .collect::<VecDeque<VideoInfo>>();
         logger.info(format!("Finished {} >> {}sec", aff.as_ref_name(), request.elapsed().as_secs_f32()));

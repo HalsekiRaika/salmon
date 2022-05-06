@@ -7,19 +7,17 @@ use std::str::FromStr;
 use anyhow::{Result, Context};
 use chrono::{Datelike, DateTime, Local};
 use futures::StreamExt;
+use misery_rs::{CacheWrapper, MiseryHandler};
 use once_cell::sync::OnceCell;
 use reqwest::{Client, StatusCode};
 use reqwest::header::{HeaderName, HeaderValue};
-use serde::{Deserialize, Deserializer};
+use serde::{Serialize, Deserialize, Deserializer};
 use serde::de::{Error, Visitor};
-use crate::entry::cache::{Cache, CacheHandler};
 use crate::ids::StringId;
 use crate::logger::Logger;
 use crate::models::{Channel, LiverEntry};
 
-pub struct RequestEntry<'a>(&'a HashSet<LiverEntry>);
-
-pub(crate) fn get_api_key_param() -> &'static str {
+fn get_api_key_param() -> &'static str {
     static API_KEY: OnceCell<String> = OnceCell::new();
     API_KEY.get_or_init(|| {
         dotenv::var("API_KEY")
@@ -44,143 +42,137 @@ fn get_http_client() -> &'static reqwest::Client {
     })
 }
 
-impl<'a> RequestEntry<'a> {
-    pub(crate) fn new(queue: &'a HashSet<LiverEntry>) -> Self {
-        Self(queue)
+pub(super) async fn request_video_info_concurrency(queue: &HashSet<LiverEntry>) -> Result<HashSet<VideoInfo>> {
+    let logger = Logger::new(Some("search api"));
+    let caching: MiseryHandler<StringId<Channel>, Etag> = MiseryHandler::load_from_blocking("./.cache/video_search_cache.json");
+    let client = get_http_client();
+
+    let youtube_ext = queue.iter()
+        .flat_map(|entity| entity.as_ref_site().iter()
+            .flat_map(Channel::as_youtube_id)
+            .collect::<Vec<StringId<Channel>>>())
+        .collect::<Vec<StringId<Channel>>>();
+
+    // SIDE EFFECT IN ITER MAP !
+    // This is incorrect because side effects are prohibited in Monad's fmap.
+    // But I couldn't figure out any other way to do it well, so here...
+    let responses = futures::stream::iter(youtube_ext)
+        .map(|id| {
+            let client = client;
+            let caching = &caching;
+            async move {
+                let etag = caching.find_value(&id).await.unwrap_or_default();
+                let res = client.get("https://www.googleapis.com/youtube/v3/search")
+                    .header(HeaderName::from_static("if-none-match"), HeaderValue::from_str(etag.as_ref()).expect(""))
+                    .header(HeaderName::from_static("user-agent"), HeaderValue::from_static("Nekomata-salmon (retrieve for scheduled live of virtual liver. [https://github.com/ReiRokusanami0010/salmon])"))
+                    .query(&[("channelId", id.as_ref()), ("part", "snippet"), ("type", "video"),
+                        ("eventType", "upcoming"), ("fields", "(etag, items(id(videoId)))"), ("key", get_api_key_param())])
+                    .send().await
+                    .context(RequestError::HttpGet)
+                    .expect("http_get");
+                (res, id)
+            }
+        }).buffer_unordered(*get_process_concurrency())
+        .inspect(|res| logger.info(format!("req >> {}", res.1.as_ref())))
+        .collect::<Vec<(reqwest::Response, StringId<Channel>)>>().await;
+
+    let mut id_queue = VecDeque::new();
+    for response in responses {
+        let parsed: Option<SearchedObjects> = match response.0.status() {
+            StatusCode::OK => {
+                let parsed = response.0.json::<SearchedObjects>().await
+                    .expect("failed parse");
+                logger.info(format!("rec <- {}", response.1.as_ref()));
+                caching.abs(CacheWrapper::new(response.1, Etag::new(&parsed.etag))).await;
+                Some(parsed)
+            },
+            StatusCode::NOT_MODIFIED => {
+                logger.info(format!("___ -- {}", response.1.as_ref()));
+                None
+            },
+            StatusCode::TOO_MANY_REQUESTS => {
+                logger.error("Resource Exhausted, Quota Limit exceeded!");
+                panic!()
+            },
+            _ => {
+                println!("{}", response.0.text().await.expect(""));
+                unimplemented!("unknown error code.")
+            }
+        };
+        id_queue.push_back(parsed);
     }
 
-    pub(crate) async fn request_video_info_concurrency(&self) -> Result<HashSet<VideoInfo>> {
-        let logger = Logger::new(Some("search api"));
-        let caching = CacheHandler::load_from("./.cache/video_search_cache.json");
-        let client = get_http_client();
+    logger.info("finished id search.");
 
-        let youtube_ext = self.0.iter()
-            .flat_map(|entity| entity.as_ref_site().iter()
-                .flat_map(Channel::as_youtube_id)
-                .collect::<Vec<StringId<Channel>>>())
-            .collect::<Vec<StringId<Channel>>>();
+    let response = id_queue.iter().flatten()
+        .flat_map(|raw_object| raw_object.items.iter()
+            .map(|item| item.id.video_id.clone())
+            .collect::<Vec<StringId<VideoInfo>>>())
+        .collect::<VecDeque<StringId<VideoInfo>>>();
 
-        // SIDE EFFECT IN ITER MAP !
-        // This is incorrect because side effects are prohibited in Monad's fmap.
-        // But I couldn't figure out any other way to do it well, so here...
-        let responses = futures::stream::iter(youtube_ext)
-            .map(|id| {
-                let client = client;
-                let caching = &caching;
-                async move {
-                    let etag = caching.get(id.as_ref()).await.unwrap_or_default();
-                    let res = client.get("https://www.googleapis.com/youtube/v3/search")
-                        .header(HeaderName::from_static("if-none-match"), HeaderValue::from_str(etag.as_ref()).expect(""))
-                        .header(HeaderName::from_static("user-agent"), HeaderValue::from_static("Nekomata-salmon (retrieve for scheduled live of virtual liver. [https://github.com/ReiRokusanami0010/salmon])"))
-                        .query(&[("channelId", id.as_ref()), ("part", "snippet"), ("type", "video"),
-                            ("eventType", "upcoming"), ("fields", "(etag, items(id(videoId)))"), ("key", get_api_key_param())])
-                        .send().await
-                        .context(RequestError::HttpGet)
-                        .expect("http_get");
-                    (res, id)
-                }
-            }).buffer_unordered(*get_process_concurrency())
-            .inspect(|res| logger.info(format!("req >> {}", res.1.as_ref())))
-            .collect::<Vec<(reqwest::Response, StringId<Channel>)>>().await;
+    let mut queue: VecDeque<String> = VecDeque::new();
 
-        let mut id_queue = VecDeque::new();
-        for response in responses {
-            let parsed: Option<SearchedObjects> = match response.0.status() {
-                StatusCode::OK => {
-                    let parsed = response.0.json::<SearchedObjects>().await
-                        .expect("failed parse");
-                    caching.abs(Cache::new(response.1.as_ref(), &parsed.etag)).await;
-                    logger.info(format!("rec <- {}", response.1.as_ref()));
-                    Some(parsed)
-                },
-                StatusCode::NOT_MODIFIED => {
-                    logger.info(format!("___ -- {}", response.1.as_ref()));
-                    None
-                },
-                StatusCode::TOO_MANY_REQUESTS => {
-                    logger.error("Resource Exhausted, Quota Limit exceeded!");
-                    panic!()
-                },
-                _ => {
-                    println!("{}", response.0.text().await.expect(""));
-                    unimplemented!("unknown error code.")
-                }
-            };
-            id_queue.push_back(parsed);
-        }
-
-        logger.info("finished id search.");
-
-        let response = id_queue.iter().flatten()
-            .flat_map(|raw_object| raw_object.items.iter()
-                .map(|item| item.id.video_id.clone())
-                .collect::<Vec<StringId<VideoInfo>>>())
-            .collect::<VecDeque<StringId<VideoInfo>>>();
-
-        let mut queue: VecDeque<String> = VecDeque::new();
-
-        for picked in 0..(response.len() / 50 + (if (response.len() % 50) > 0 { 1 } else { 0 } )) {
-            queue.push_back(response.iter().by_ref()
-                .skip(50 * picked).take(50)
-                .map(|id| id.as_ref().to_string())
-                .collect::<Vec<String>>()
-                .join(","));
-        }
-
-        for picked in 0..((response.len() / 5) + (if (response.len() % 5) > 0 { 1 } else { 0 } )) {
-            let aggregate = response.iter()
-                .skip(5 * picked).take(5)
-                .map(|id| id.as_ref().to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
-            logger.info(format!("({:<2}):: {}", picked + 1, aggregate));
-        }
-
-        let mut response = VecDeque::new();
-
-        logger.info("search details");
-        for video_id in queue {
-            let external = client.get("https://www.googleapis.com/youtube/v3/videos")
-                .header(HeaderName::from_static("user-agent"), HeaderValue::from_static("Nekomata-salmon (retrieve for scheduled live of virtual liver. [https://github.com/ReiRokusanami0010/salmon])"))
-                .query(&[("id", video_id.as_str()), ("part", "liveStreamingDetails, statistics, snippet"),
-                    ("fields", "(etag, items(id, snippet(title, description, channelTitle, channelId, publishedAt), statistics, liveStreamingDetails))"),
-                    ("key", get_api_key_param())])
-                .send()
-                .await
-                .context(RequestError::HttpGet)?;
-            let parsed: Option<SearchedVideoInfoObjects> = match external.status() {
-                StatusCode::OK => {
-                    let parsed = external.json::<SearchedVideoInfoObjects>().await
-                        .context(RequestError::DataParse)?;
-                    Some(parsed)
-                },
-                StatusCode::NOT_MODIFIED => None,
-                StatusCode::TOO_MANY_REQUESTS => {
-                    logger.error("Resource Exhausted, Quota Limit exceeded!");
-                    panic!()
-                },
-                _ => {
-                    println!("{}", external.text().await.expect(""));
-                    unimplemented!("unknown error code.")
-                }
-            };
-            response.push_back(parsed)
-        }
-        logger.info("finished detail search.");
-
-        let aggregates = response.iter().flatten()
-            .flat_map(|searched| searched.items.to_vec())
-            .collect::<HashSet<VideoInfo>>();
-
-        Ok(aggregates)
-
+    for picked in 0..(response.len() / 50 + (if (response.len() % 50) > 0 { 1 } else { 0 } )) {
+        queue.push_back(response.iter().by_ref()
+            .skip(50 * picked).take(50)
+            .map(|id| id.as_ref().to_string())
+            .collect::<Vec<String>>()
+            .join(","));
     }
+
+    for picked in 0..((response.len() / 5) + (if (response.len() % 5) > 0 { 1 } else { 0 } )) {
+        let aggregate = response.iter()
+            .skip(5 * picked).take(5)
+            .map(|id| id.as_ref().to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+        logger.info(format!("({:<2}):: {}", picked + 1, aggregate));
+    }
+
+    let mut response = VecDeque::new();
+
+    logger.info("search details");
+    for video_id in queue {
+        let external = client.get("https://www.googleapis.com/youtube/v3/videos")
+            .header(HeaderName::from_static("user-agent"), HeaderValue::from_static("Nekomata-salmon (retrieve for scheduled live of virtual liver. [https://github.com/ReiRokusanami0010/salmon])"))
+            .query(&[("id", video_id.as_str()), ("part", "liveStreamingDetails, statistics, snippet"),
+                ("fields", "(etag, items(id, snippet(title, description, channelTitle, channelId, publishedAt), statistics, liveStreamingDetails))"),
+                ("key", get_api_key_param())])
+            .send()
+            .await
+            .context(RequestError::HttpGet)?;
+        let parsed: Option<SearchedVideoInfoObjects> = match external.status() {
+            StatusCode::OK => {
+                let parsed = external.json::<SearchedVideoInfoObjects>().await
+                    .context(RequestError::DataParse)?;
+                Some(parsed)
+            },
+            StatusCode::NOT_MODIFIED => None,
+            StatusCode::TOO_MANY_REQUESTS => {
+                logger.error("Resource Exhausted, Quota Limit exceeded!");
+                panic!()
+            },
+            _ => {
+                println!("{}", external.text().await.expect(""));
+                unimplemented!("unknown error code.")
+            }
+        };
+        response.push_back(parsed)
+    }
+    logger.info("finished detail search.");
+
+    let aggregates = response.iter().flatten()
+        .flat_map(|searched| searched.items.to_vec())
+        .collect::<HashSet<VideoInfo>>();
+
+    Ok(aggregates)
+
 }
 
-pub async fn channel_info_request(entry: &HashSet<LiverEntry>) -> anyhow::Result<HashSet<ChannelInfo>> {
+pub(super) async fn channel_info_request(entry: &HashSet<LiverEntry>) -> anyhow::Result<HashSet<ChannelInfo>> {
     let logger = Logger::new(Some("search api"));
     let client = get_http_client();
-    let caching = CacheHandler::load_from("./.cache/channel_search_cache.json");
+    let caching: MiseryHandler<StringId<Channel>, Etag> = MiseryHandler::load_from_blocking("./.cache/ch_search_cache.json");
     let youtube_ext = entry.iter()
         .flat_map(|entity| entity.as_ref_site().iter()
             .flat_map(Channel::as_youtube_id)
@@ -193,7 +185,7 @@ pub async fn channel_info_request(entry: &HashSet<LiverEntry>) -> anyhow::Result
             let client = client;
             let caching = &caching;
             async move {
-                let etag = caching.get(id.as_ref()).await.unwrap_or_default();
+                let etag = caching.find_value(&id).await.unwrap_or_default();
                 let res = client.get("https://www.googleapis.com/youtube/v3/channels")
                     .header(HeaderName::from_static("if-none-match"), HeaderValue::from_str(etag.as_ref()).expect(""))
                     .header(HeaderName::from_static("user-agent"), HeaderValue::from_static("Nekomata-salmon (retrieve for scheduled live of virtual liver. [https://github.com/ReiRokusanami0010/salmon])"))
@@ -212,8 +204,8 @@ pub async fn channel_info_request(entry: &HashSet<LiverEntry>) -> anyhow::Result
             StatusCode::OK => {
                 let parsed = response.0.json::<ChannelInfoWithEtag>().await
                     .expect("failed parse");
-                caching.abs(Cache::new(response.1.as_ref(), &parsed.etag)).await;
                 logger.info(format!("rec <- {}", response.1.as_ref()));
+                caching.abs(CacheWrapper::new(response.1, Etag::new(&parsed.etag))).await;
                 Some(parsed)
             },
             StatusCode::NOT_MODIFIED => {
@@ -303,6 +295,21 @@ impl LiveStreamingDetails {
 
     pub fn as_ref_actual_end_time_optional(&self) -> &Option<DateTime<Local>> {
         &self.actual_end_time
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
+#[serde(transparent)]
+pub struct Etag(String);
+
+impl Etag {
+    fn new<S>(etag: S) -> Etag where S: Into<String> {
+        Self(etag.into())
+    }
+
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 

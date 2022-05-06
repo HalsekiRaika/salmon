@@ -1,6 +1,5 @@
-mod cache;
 mod request;
-pub(crate) mod transport;
+mod transport;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
@@ -9,7 +8,7 @@ use futures::StreamExt;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use walkdir::{DirEntry, WalkDir};
-use crate::entry::request::{channel_info_request, RequestEntry, VideoInfo};
+use crate::entry::request::{channel_info_request, request_video_info_concurrency, VideoInfo};
 use crate::entry::transport::{Applier, salmon};
 use crate::entry::transport::salmon::{Affiliation, Liver};
 use crate::logger::Logger;
@@ -131,7 +130,7 @@ pub async fn upcoming_live_request_handler() -> anyhow::Result<()> {
         let client = &mut client;
         let request = Instant::now();
         logger.info(format!("Request << {}", aff.as_ref_name()));
-        let video_infos = RequestEntry::new(liver).request_video_info_concurrency().await
+        let video_infos = request_video_info_concurrency(liver).await
             .expect("failed req.").iter()
             .filter(|video| !video.is_live_finished())
             .filter(|video| !video.is_too_long_span_live())
@@ -148,11 +147,5 @@ pub async fn upcoming_live_request_handler() -> anyhow::Result<()> {
         };
     }).await;
     logger.info(format!("Total elapsed >>> {}sec", total.elapsed().as_secs_f32()));
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub async fn send_handler() -> anyhow::Result<()> {
-
     Ok(())
 }

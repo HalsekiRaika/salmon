@@ -33,6 +33,7 @@ once_cell = "1.10.0"
 tokio = { version = "1.17.0", features = ["full"] }
 void = "1.0.2"
 tokio-cron-scheduler = "0.6.5"
+misery-rs = { git = "https://github.com/ReiRokusanami0010/misery-rs" }
 
 [build-dependencies]
 tonic-build = { version = "0.6.0", features = ["prost", "compression"] }

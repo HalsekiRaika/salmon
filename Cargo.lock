@@ -891,6 +891,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "misery-rs"
+version = "0.1.0"
+source = "git+https://github.com/ReiRokusanami0010/misery-rs#a034d96dded606674971f360fb0c164104b23e44"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "dotenv",
+ "once_cell",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1375,6 +1390,7 @@ dependencies = [
  "dotenv",
  "futures",
  "git2",
+ "misery-rs",
  "once_cell",
  "prost 0.9.0",
  "prost-types 0.9.0",

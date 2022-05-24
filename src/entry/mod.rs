@@ -1,16 +1,19 @@
 mod request;
 mod transport;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
+use std::collections::vec_deque::VecDeque;
 use std::time::Instant;
 use async_std::task::block_on;
 use futures::StreamExt;
+use misery_rs::{CacheWrapper, MiseryHandler};
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use walkdir::{DirEntry, WalkDir};
 use crate::entry::request::{channel_info_request, request_video_info_concurrency, VideoInfo};
 use crate::entry::transport::{Applier, salmon};
 use crate::entry::transport::salmon::{Affiliation, Liver};
+use crate::ids::StringId;
 use crate::logger::Logger;
 use crate::models::{AffiliationEntry, Channel, LiverEntry};
 
@@ -125,6 +128,7 @@ pub async fn upcoming_live_request_handler() -> anyhow::Result<()> {
 
     futures::stream::iter(get_or_init_config().iter()).for_each(|(aff, liver)| async move {
         let logger = Logger::new(Some("Request"));
+        let caching: MiseryHandler<StringId<VideoInfo>, VideoInfo> = MiseryHandler::load_from_blocking(format!("./.cache/video_info_{}_cache.json", aff.as_ref_name()));
         let mut client = transport::build_client().await
             .expect("build_grpc_client");
         let client = &mut client;
@@ -138,8 +142,16 @@ pub async fn upcoming_live_request_handler() -> anyhow::Result<()> {
             .inspect(|video| logger.debug(format!("{}: {}", video.as_ref_id(), video.as_ref_title())))
             .map(|video| video.to_owned())
             .collect::<VecDeque<VideoInfo>>();
+        let delete = caching.all_items().await.iter()
+            .filter(|valid| valid.as_ref_value().is_live_finished())
+            .map(|del| salmon::Live::from(del.as_ref_value().to_owned()).del_sign())
+            .collect::<VecDeque<_>>();
+        video_infos.iter().by_ref().for_each(|video| {
+            let caching = &caching;
+            block_on(caching.abs(CacheWrapper::new(video.as_ref_id().to_owned(), video.to_owned())));
+        });
         logger.info(format!("Finished {} >> {}sec", aff.as_ref_name(), request.elapsed().as_secs_f32()));
-        let send = video_infos.iter().map(|info| salmon::Live::from(info.to_owned())).collect::<Vec<_>>();
+        let send = video_infos.iter().map(|info| salmon::Live::from(info.to_owned())).chain(delete).collect::<Vec<_>>();
         let stream_req = tonic::Request::new(futures::stream::iter(send));
         match client.clone().insert_req_live(stream_req).await {
             Ok(_) => (),

@@ -3,7 +3,7 @@
 use std::time::SystemTime;
 use anyhow::Context;
 use serde::{Serialize, Deserialize};
-use chrono::{Local};
+use chrono::Local;
 use once_cell::sync::OnceCell;
 use tonic::transport::Channel as GrpcChannel;
 
@@ -120,5 +120,33 @@ impl Default for UpdateSignature {
             .parse()
             .unwrap();
         Self(a)
+    }
+}
+
+impl Affiliation {
+    pub fn del_sign(mut self) -> Self {
+        self.override_at = -1;
+        self
+    }
+}
+
+impl Liver {
+    pub fn del_sign(mut self) -> Self {
+        self.override_at = -1;
+        self
+    }
+}
+
+impl Channel {
+    pub fn del_sign(mut self) -> Self {
+        self.override_at = -1;
+        self
+    }
+}
+
+impl Live {
+    pub fn del_sign(mut self) -> Self {
+        self.override_at = -1;
+        self
     }
 }

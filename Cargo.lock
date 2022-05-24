@@ -893,7 +893,7 @@ dependencies = [
 [[package]]
 name = "misery-rs"
 version = "0.1.0"
-source = "git+https://github.com/ReiRokusanami0010/misery-rs#a034d96dded606674971f360fb0c164104b23e44"
+source = "git+https://github.com/ReiRokusanami0010/misery-rs#9e0e2d76231cb144c85b8d3d987e3af09e1a4388"
 dependencies = [
  "anyhow",
  "async-std",

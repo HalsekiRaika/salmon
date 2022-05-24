@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
+
+use std::collections::vec_deque::VecDeque;
 use std::io::Read;
 use std::path::Path;
 use anyhow::Context;

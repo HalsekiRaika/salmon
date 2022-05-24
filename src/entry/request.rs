@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+use std::collections::vec_deque::VecDeque;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -264,6 +265,7 @@ impl VideoInfo {
 
     pub fn is_live_finished(&self) -> bool {
         self.details.actual_end_time.is_some()
+            || self.details.scheduled_start_time.unwrap().timestamp() <= Local::now().timestamp()
     }
 
     pub fn is_too_long_span_live(&self) -> bool {
@@ -314,34 +316,34 @@ impl Etag {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct SearchedObjects {
     etag: String,
     items: Vec<IdentifierWrapper>
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct IdentifierWrapper {
     id: Identifier,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct Identifier {
     #[serde(rename = "videoId")]
     video_id: StringId<VideoInfo>
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct SearchedVideoInfoObjects {
     etag: String,
     items: Vec<VideoInfo>
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct VideoInfo {
     id: StringId<VideoInfo>,
     snippet: VideoInfoSnippet,
@@ -351,7 +353,7 @@ pub struct VideoInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct VideoInfoSnippet {
     #[serde(rename = "publishedAt")]
     published_at: DateTime<Local>,
@@ -366,7 +368,7 @@ pub struct VideoInfoSnippet {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct Statistics {
     #[serde(default)]
     #[serde(with = "from_string")]
@@ -387,7 +389,7 @@ pub struct Statistics {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct LiveStreamingDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "actualStartTime")]
@@ -403,7 +405,7 @@ pub struct LiveStreamingDetails {
     active_live_chat_id: Option<String>
 }
 
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct TextComponent(pub String);
 
 impl FromStr for TextComponent {
@@ -459,7 +461,7 @@ mod from_string {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct ChannelInfoWithEtag {
     etag: String,
     items: Vec<ChannelInfo>
@@ -473,7 +475,7 @@ impl ChannelInfoWithEtag {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct ChannelInfo {
     id: StringId<ChannelInfo>,
     snippet: ChannelInfoSnippet
@@ -498,7 +500,7 @@ impl ChannelInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct ChannelInfoSnippet {
     title: String,
     description: String,
@@ -526,7 +528,7 @@ impl ChannelInfoSnippet {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct ChannelInfoThumbnail {
     high: HighRes
 }
@@ -539,7 +541,7 @@ impl ChannelInfoThumbnail {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct HighRes {
     url: String
 }

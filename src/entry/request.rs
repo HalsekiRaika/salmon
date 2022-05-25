@@ -105,29 +105,29 @@ pub(super) async fn request_video_info_concurrency(queue: &HashSet<LiverEntry>) 
 
     logger.info("finished id search.");
 
-    let response = id_queue.iter().flatten()
-        .flat_map(|raw_object| raw_object.items.iter()
-            .map(|item| item.id.video_id.clone())
+    let response = id_queue.into_iter().flatten()
+        .flat_map(|raw_object| raw_object.items.into_iter()
+            .map(|item| item.id.video_id)
             .collect::<Vec<StringId<VideoInfo>>>())
         .collect::<VecDeque<StringId<VideoInfo>>>();
-
-    let mut queue: VecDeque<String> = VecDeque::new();
-
-    for picked in 0..(response.len() / 50 + (if (response.len() % 50) > 0 { 1 } else { 0 } )) {
-        queue.push_back(response.iter().by_ref()
-            .skip(50 * picked).take(50)
-            .map(|id| id.as_ref().to_string())
-            .collect::<Vec<String>>()
-            .join(","));
-    }
 
     for picked in 0..((response.len() / 5) + (if (response.len() % 5) > 0 { 1 } else { 0 } )) {
         let aggregate = response.iter()
             .skip(5 * picked).take(5)
-            .map(|id| id.as_ref().to_string())
-            .collect::<Vec<String>>()
+            .map(|id| id.as_ref())
+            .collect::<Vec<&str>>()
             .join(", ");
         logger.info(format!("({:<2}):: {}", picked + 1, aggregate));
+    }
+
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    for picked in 0..(response.len() / 50 + (if (response.len() % 50) > 0 { 1 } else { 0 } )) {
+        queue.push_back(response.clone().into_iter()
+            .skip(50 * picked).take(50)
+            .map(|id| id.breach_inner())
+            .collect::<Vec<String>>()
+            .join(","));
     }
 
     let mut response = VecDeque::new();
@@ -162,8 +162,8 @@ pub(super) async fn request_video_info_concurrency(queue: &HashSet<LiverEntry>) 
     }
     logger.info("finished detail search.");
 
-    let aggregates = response.iter().flatten()
-        .flat_map(|searched| searched.items.to_vec())
+    let aggregates = response.into_iter().flatten()
+        .flat_map(|searched| searched.items)
         .collect::<HashSet<VideoInfo>>();
 
     Ok(aggregates)
@@ -225,8 +225,8 @@ pub(super) async fn channel_info_request(entry: &HashSet<LiverEntry>) -> anyhow:
         id_queue.push_back(parsed);
     }
 
-    let response = id_queue.iter().flatten()
-        .flat_map(|raw_object| raw_object.to_owned().separate_etag().1)
+    let response = id_queue.into_iter().flatten()
+        .flat_map(|raw_object| raw_object.separate_etag().1)
         .collect::<HashSet<ChannelInfo>>();
 
     Ok(response)

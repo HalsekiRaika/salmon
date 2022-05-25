@@ -48,6 +48,10 @@ impl<T> StringId<T> {
     pub fn as_ref(&self) -> &str {
         &self.value
     }
+
+    pub fn breach_inner(self) -> String {
+        self.value
+    }
 }
 
 impl<T> Display for StringId<T> {
